@@ -47,6 +47,7 @@
 #'
 #' @param formula The formula used to estimate hetergenous effects
 #' @param data The data to be used.  Data MUST be in XYZ format.
+#'        Data MUST NOT contain NAs.
 #' @param treatments Specify which of columns in the data are treatments.
 #' @param subset The subset of variables for which to return MCATEs.
 #'        Setting to NULL will return all variables in the formula.
@@ -123,56 +124,30 @@ HetEffects <- function(formula,
 
   attr(Xmat, "treatments") <- treatments
 
-
-  # Check to see if variables are numeric, if so put them in quintiles
-
-  # TODO: find a better way to do this...
-  col_numeric <- apply(Xmat, 2, function(x) length(unique(x)) > 15 )
-
-  # SM: Do we really want to do this?  We might be better off forcing
-  # users to do this themselves.  What we have now could yield unexpected
-  # behavior.
-
-  # TODO: Instead perhaps we should move this to a new function,
-  # and allow users to customize this.  We should then allow
-  # users to pass the results as an argument to HetEffects, and/or
-  # call the function here with sensible defaults.
-
-  # TODO: make this available to users outside of the
-  # HetEffects() scope.
-  quintilize = function(x){
-    qs = quantile(x, probs = c(0, .25, .5, .75, 1))
-    if(length(unique(qs)) < 5) warning("Binning quantitative variable to < 5 bins")
-    qs[1] = qs[1] - 0.0001 # ensures cut doesn't set values at lowest quintile to NA
-    cut(x, unique(qs))
-  }
+  # Make sure there are no numeric variables
+  col_numeric <- apply(Xmat, 2, function(x) length(unique(x)) > 20 )
+  if (any(col_numeric)) stop(
+    "Columns in design matrix must be discrete (20 unique values or fewer).")
 
   # Generate matrix for prediction:
-  Xmat_buckets = Xmat
-  Xmat_buckets[col_numeric] = apply(Xmat_buckets[col_numeric], 2,
-      quintilize)
 
-  veclist = apply(Xmat_buckets[,-1], 2, unique)
+  # First make sure there are not too many factor combinations
+  veclist = apply(Xmat[,-1], 2, unique)
   veclist = lapply(veclist, na.omit)
   veclist = lapply(veclist, as.vector)
   if (prod(unlist(lapply(veclist, length))) > 1e10) {
     stop("Too many factor combinations to estimate effects")
   }
+
   newX = expand.grid(veclist, stringsAsFactors=FALSE)
 
-  # Set columns in newX to numeric that are numeric in Xmat_buckets
-  numeric_cols = unlist(lapply(Xmat_buckets, is.numeric))
-
-  newX[,numeric_cols[-1]] = lapply(newX[,numeric_cols[-1]], as.numeric)
-#  Xmat_buckets contrasts are different perhaps?
-
-  # TODO: Decide on what to do about NAs
+  # TODO: Check to make sure there are no NAs
   #  anyNA = function(x) any(is.na(x))
-  #  apply(Xmat_buckets, 2, anyNA)
+  #  apply(Xmat, 2, anyNA)
 
 
   # Put everything in mod matrix first:
-  Xmatb <- data.frame(model.matrix(~ -1 + ., Xmat_buckets[,-1]))
+  Xmatb <- data.frame(model.matrix(~ -1 + ., Xmat[,-1]))
   newXb <- data.frame(model.matrix(~ -1 +., newX))
 #  names(newXb) == names(Xmatb)
 
@@ -227,5 +202,37 @@ HetEffects <- function(formula,
   }
   return(list(boostrap_samples = res, effectX = newXb))
 }
+
+
+#' Split by Quantile
+#'
+#' The split_by_quantile function splits a quantitative variable into
+#' n - 1 quantile chunks.
+#'
+#' @usage
+#' split_by_quantile(x, n)
+#'
+#' @param x The variable
+#' @param n The n-th quantiles to split the variable, results in n - 1 levels.
+#'
+#' @return A factor with n - 1 levels.
+#' @export
+#' @author Solomon Messing
+split_by_quantile = function(x, n){
+  qs = quantile(x, probs = seq(0, 1, length.out = n))
+  if(length(unique(qs)) < n) warning("Binning quantitative variable to < n bins")
+  qs[1] = qs[1] - 0.0000001 # ensures cut doesn't set values at lowest quintile to NA
+  cut(x, unique(qs))
+}
+
+# Example usage:
+# Xmat_buckets = Xmat
+# Xmat_buckets[col_numeric] = apply(Xmat_buckets[col_numeric], 2,
+#     quintilize)
+
+
+
+
+
 
 # TODO: process and format results, display for the user.
